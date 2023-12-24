@@ -217,12 +217,13 @@ mod test {
 
     #[test]
     fn full_test() {
-        let pattern = Pattern::new(r"a\d[\w:]").expect("Pattern is correct");
-        assert!(pattern.test("a9c"));
+        let pattern = Pattern::new(r"a\d[\w:][^x]").expect("Pattern is correct");
+        assert!(pattern.test("a9cv"));
         assert!(pattern.test("da4cg"));
-        assert!(!pattern.test("ab9c"));
-        assert!(!pattern.test("ab9X"));
-        assert!(!pattern.test("ab9_"));
-        assert!(!pattern.test("ab9:"));
+        assert!(!pattern.test("da4cx"));
+        assert!(!pattern.test("ab9cv"));
+        assert!(!pattern.test("ab9Xv"));
+        assert!(!pattern.test("ab9_v"));
+        assert!(!pattern.test("ab9:v"));
     }
 }
