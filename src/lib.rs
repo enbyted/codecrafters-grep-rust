@@ -17,6 +17,7 @@ enum SingleCharacterMatcher {
     Digit,
     Alphanumeric,
     Group(Vec<SingleCharacterMatcher>),
+    NegativeGroup(Vec<SingleCharacterMatcher>),
 }
 
 impl SingleCharacterMatcher {
@@ -53,10 +54,21 @@ impl SingleCharacterMatcher {
 
     pub fn new_group(input: &mut Peekable<impl Iterator<Item = char>>) -> Result<Self> {
         let mut options = Vec::new();
+        let negative = if input.peek() == Some(&'^') {
+            input.next(); // Consume "^"
+            true
+        } else {
+            false
+        };
+
         while let Some(ch) = input.peek() {
             if *ch == ']' {
                 input.next(); // Consume the ']' character
-                return Ok(Self::Group(options));
+                if negative {
+                    return Ok(Self::NegativeGroup(options));
+                } else {
+                    return Ok(Self::Group(options));
+                }
             } else {
                 options.push(Self::new_in_group(input)?);
             }
@@ -71,6 +83,7 @@ impl SingleCharacterMatcher {
             SingleCharacterMatcher::Digit => ch.is_ascii_digit(),
             SingleCharacterMatcher::Alphanumeric => ch.is_ascii_alphanumeric() || ch == '_',
             SingleCharacterMatcher::Group(options) => options.iter().any(|o| o.test(ch)),
+            SingleCharacterMatcher::NegativeGroup(options) => !options.iter().any(|o| o.test(ch)),
         }
     }
 }
@@ -189,6 +202,17 @@ mod test {
         assert!(pattern.test("za"));
         assert!(!pattern.test("b"));
         assert!(!pattern.test(":"));
+    }
+
+    #[test]
+    fn negative_group_match() {
+        let pattern = Pattern::new(r"[^a\d]").expect("Pattern is correct");
+        assert!(!pattern.test("1"));
+        assert!(!pattern.test("a"));
+        assert!(!pattern.test("9"));
+        assert!(pattern.test("za"));
+        assert!(pattern.test("b"));
+        assert!(pattern.test(":"));
     }
 
     #[test]
