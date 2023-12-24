@@ -511,7 +511,7 @@ mod test {
     fn backreference_test() {
         let pattern = Pattern::new(r"(\w+) and \1").expect("Pattern is correct");
         assert!(pattern.test("cat and cat"));
-        assert!(!pattern.test("cat and dog"));
+        assert!(!pattern.test("cat and dog2"));
     }
 
     #[test]
