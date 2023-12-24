@@ -88,6 +88,11 @@ impl SingleCharacterMatcher {
 }
 
 enum Matcher {
+    Repeat {
+        matcher: Box<Matcher>,
+        min: Option<usize>,
+        max: Option<usize>,
+    },
     SingleCharacter(SingleCharacterMatcher),
     StartOfString,
     EndOfString,
@@ -104,16 +109,57 @@ impl Matcher {
                 input.next();
                 Ok(Self::EndOfString)
             }
-            Some(_) => Ok(Self::SingleCharacter(SingleCharacterMatcher::new(input)?)),
+            Some(_) => {
+                let matcher = Self::SingleCharacter(SingleCharacterMatcher::new(input)?);
+
+                Ok(match input.peek() {
+                    Some('+') => {
+                        input.next();
+                        Self::Repeat {
+                            matcher: Box::new(matcher),
+                            min: Some(1),
+                            max: None,
+                        }
+                    }
+                    _ => matcher,
+                })
+            }
             None => Err(Error::EOF),
         }
     }
 
-    pub fn test(&self, input: &mut Peekable<impl Iterator<Item = (usize, char)>>) -> bool {
+    pub fn test<T>(&self, input: &mut Peekable<T>) -> bool
+    where
+        T: Iterator<Item = (usize, char)> + Clone,
+    {
         match self {
             Matcher::SingleCharacter(c) => input.next().is_some_and(|ch| c.test(ch.1)),
             Matcher::StartOfString => input.peek().is_some_and(|(idx, _)| *idx == 0),
             Matcher::EndOfString => input.peek().is_none(),
+            Matcher::Repeat { matcher, min, max } => {
+                let mut count = 0;
+                loop {
+                    let mut input_clone = input.clone();
+                    if !matcher.test(&mut input_clone) {
+                        break;
+                    }
+                    std::mem::swap(input, &mut input_clone);
+                    count += 1;
+                    if let Some(max) = max {
+                        if count == *max {
+                            break;
+                        }
+                    }
+                }
+
+                if let Some(min) = min {
+                    if count < *min {
+                        return false;
+                    }
+                }
+
+                return true;
+            }
         }
     }
 }
@@ -146,7 +192,10 @@ impl Pattern {
         false
     }
 
-    fn test_section(&self, mut input: Peekable<impl Iterator<Item = (usize, char)>>) -> bool {
+    fn test_section<T>(&self, mut input: Peekable<T>) -> bool
+    where
+        T: Iterator<Item = (usize, char)> + Clone,
+    {
         for matcher in &self.matchers {
             if !matcher.test(&mut input) {
                 return false;
@@ -240,6 +289,15 @@ mod test {
         assert!(pattern.test("a"));
         assert!(!pattern.test("ab"));
         assert!(pattern.test("ba"));
+    }
+
+    #[test]
+    fn one_or_more_match() {
+        let pattern = Pattern::new(r"ab+c").expect("Pattern is correct");
+        assert!(pattern.test("abc"));
+        assert!(pattern.test("abbc"));
+        assert!(pattern.test("abbbc"));
+        assert!(!pattern.test("ac"));
     }
 
     #[test]
