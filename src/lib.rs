@@ -4,7 +4,7 @@ use thiserror::Error;
 pub enum Error {
     #[error("Unexpected end of input")]
     EOF,
-    #[error("Unknown character group `\\{0}`")]
+    #[error("Unknown character class `\\{0}`")]
     UnknownCharacterType(char),
 }
 
@@ -13,6 +13,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 enum Matcher {
     Literal(char),
     Digit,
+    Alphanumeric,
 }
 
 impl Matcher {
@@ -21,6 +22,7 @@ impl Matcher {
             Some('\\') => match input.next() {
                 Some('\\') => Ok(Self::Literal('\\')),
                 Some('d') => Ok(Self::Digit),
+                Some('w') => Ok(Self::Alphanumeric),
                 Some(ch) => Err(Error::UnknownCharacterType(ch)),
                 None => Err(Error::EOF),
             },
@@ -31,20 +33,11 @@ impl Matcher {
 
     pub fn test(&self, input: &mut impl Iterator<Item = char>) -> bool {
         match self {
-            Matcher::Literal(c) => {
-                if let Some(ch) = input.next() {
-                    ch == *c
-                } else {
-                    false
-                }
-            }
-            Matcher::Digit => {
-                if let Some(ch) = input.next() {
-                    ch.is_ascii_digit()
-                } else {
-                    false
-                }
-            }
+            Matcher::Literal(c) => input.next().is_some_and(|ch| ch == *c),
+            Matcher::Digit => input.next().is_some_and(|ch| ch.is_ascii_digit()),
+            Matcher::Alphanumeric => input
+                .next()
+                .is_some_and(|ch| ch.is_ascii_alphanumeric() || ch == '_'),
         }
     }
 }
@@ -125,10 +118,23 @@ mod test {
     }
 
     #[test]
+    fn alphanumeric_match() {
+        let pattern = Pattern::new(r"\w").expect("Pattern is correct");
+        assert!(pattern.test("1"));
+        assert!(pattern.test("a"));
+        assert!(pattern.test("Z"));
+        assert!(pattern.test("_"));
+        assert!(!pattern.test("-"));
+        assert!(!pattern.test(":"));
+    }
+
+    #[test]
     fn full_test() {
-        let pattern = Pattern::new(r"a\dc").expect("Pattern is correct");
+        let pattern = Pattern::new(r"a\d\w").expect("Pattern is correct");
         assert!(pattern.test("a9c"));
         assert!(pattern.test("da4cg"));
         assert!(!pattern.test("ab9c"));
+        assert!(!pattern.test("ab9X"));
+        assert!(!pattern.test("ab9_"));
     }
 }
