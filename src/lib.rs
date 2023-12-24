@@ -1,3 +1,5 @@
+use std::iter::Peekable;
+
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -10,34 +12,84 @@ pub enum Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-enum Matcher {
+enum SingleCharacterMatcher {
     Literal(char),
     Digit,
     Alphanumeric,
+    Group(Vec<SingleCharacterMatcher>),
+}
+
+impl SingleCharacterMatcher {
+    pub fn new(input: &mut Peekable<impl Iterator<Item = char>>) -> Result<Self> {
+        match input.next() {
+            Some('\\') => Self::new_class(input.next().ok_or(Error::EOF)?),
+            Some('[') => Self::new_group(input),
+            Some(ch) => Ok(Self::new_literal(ch)),
+            None => Err(Error::EOF),
+        }
+    }
+
+    fn new_in_group(input: &mut impl Iterator<Item = char>) -> Result<Self> {
+        match input.next() {
+            Some('\\') => Self::new_class(input.next().ok_or(Error::EOF)?),
+            Some(ch) => Ok(Self::new_literal(ch)),
+            None => Err(Error::EOF),
+        }
+    }
+
+    pub fn new_literal(ch: char) -> Self {
+        SingleCharacterMatcher::Literal(ch)
+    }
+
+    pub fn new_class(class: char) -> Result<Self> {
+        match class {
+            '\\' => Ok(Self::Literal('\\')),
+            ']' => Ok(Self::Literal(']')),
+            'd' => Ok(Self::Digit),
+            'w' => Ok(Self::Alphanumeric),
+            ch => Err(Error::UnknownCharacterType(ch)),
+        }
+    }
+
+    pub fn new_group(input: &mut Peekable<impl Iterator<Item = char>>) -> Result<Self> {
+        let mut options = Vec::new();
+        while let Some(ch) = input.peek() {
+            if *ch == ']' {
+                input.next(); // Consume the ']' character
+                return Ok(Self::Group(options));
+            } else {
+                options.push(Self::new_in_group(input)?);
+            }
+        }
+
+        Err(Error::EOF)
+    }
+
+    pub fn test(&self, ch: char) -> bool {
+        match self {
+            SingleCharacterMatcher::Literal(c) => *c == ch,
+            SingleCharacterMatcher::Digit => ch.is_ascii_digit(),
+            SingleCharacterMatcher::Alphanumeric => ch.is_ascii_alphanumeric() || ch == '_',
+            SingleCharacterMatcher::Group(options) => options.iter().any(|o| o.test(ch)),
+        }
+    }
+}
+
+enum Matcher {
+    SingleCharacter(SingleCharacterMatcher),
 }
 
 impl Matcher {
-    pub fn new(input: &mut impl Iterator<Item = char>) -> Result<Self> {
-        match input.next() {
-            Some('\\') => match input.next() {
-                Some('\\') => Ok(Self::Literal('\\')),
-                Some('d') => Ok(Self::Digit),
-                Some('w') => Ok(Self::Alphanumeric),
-                Some(ch) => Err(Error::UnknownCharacterType(ch)),
-                None => Err(Error::EOF),
-            },
-            Some(ch) => Ok(Self::Literal(ch)),
+    pub fn new(input: &mut Peekable<impl Iterator<Item = char>>) -> Result<Self> {
+        match input.peek() {
+            Some(_) => Ok(Self::SingleCharacter(SingleCharacterMatcher::new(input)?)),
             None => Err(Error::EOF),
         }
     }
 
     pub fn test(&self, input: &mut impl Iterator<Item = char>) -> bool {
         match self {
-            Matcher::Literal(c) => input.next().is_some_and(|ch| ch == *c),
-            Matcher::Digit => input.next().is_some_and(|ch| ch.is_ascii_digit()),
-            Matcher::Alphanumeric => input
-                .next()
-                .is_some_and(|ch| ch.is_ascii_alphanumeric() || ch == '_'),
+            Matcher::SingleCharacter(c) => input.next().is_some_and(|ch| c.test(ch)),
         }
     }
 }
@@ -129,12 +181,24 @@ mod test {
     }
 
     #[test]
+    fn group_match() {
+        let pattern = Pattern::new(r"[a\d]").expect("Pattern is correct");
+        assert!(pattern.test("1"));
+        assert!(pattern.test("a"));
+        assert!(pattern.test("9"));
+        assert!(pattern.test("za"));
+        assert!(!pattern.test("b"));
+        assert!(!pattern.test(":"));
+    }
+
+    #[test]
     fn full_test() {
-        let pattern = Pattern::new(r"a\d\w").expect("Pattern is correct");
+        let pattern = Pattern::new(r"a\d[\w:]").expect("Pattern is correct");
         assert!(pattern.test("a9c"));
         assert!(pattern.test("da4cg"));
         assert!(!pattern.test("ab9c"));
         assert!(!pattern.test("ab9X"));
         assert!(!pattern.test("ab9_"));
+        assert!(!pattern.test("ab9:"));
     }
 }
