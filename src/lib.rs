@@ -129,6 +129,14 @@ impl Matcher {
                             max: None,
                         }
                     }
+                    Some('?') => {
+                        input.next();
+                        Self::Repeat {
+                            matcher: Box::new(matcher),
+                            min: None,
+                            max: Some(1),
+                        }
+                    }
                     _ => matcher,
                 })
             }
@@ -314,6 +322,15 @@ mod test {
         assert!(pattern.test("abc"));
         assert!(pattern.test("abbc"));
         assert!(pattern.test("abbbc"));
+        assert!(pattern.test("ac"));
+    }
+
+    #[test]
+    fn zero_or_one_match() {
+        let pattern = Pattern::new(r"ab?c").expect("Pattern is correct");
+        assert!(pattern.test("abc"));
+        assert!(!pattern.test("abbc"));
+        assert!(!pattern.test("abbbc"));
         assert!(pattern.test("ac"));
     }
 
