@@ -12,6 +12,7 @@ pub enum Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum SingleCharacterMatcher {
     Literal(char),
     Any,
@@ -90,15 +91,18 @@ impl SingleCharacterMatcher {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum Matcher {
     Repeat {
         matcher: Box<Matcher>,
         min: Option<usize>,
         max: Option<usize>,
     },
+    CaptureGroup(Vec<Matcher>),
     SingleCharacter(SingleCharacterMatcher),
     StartOfString,
     EndOfString,
+    Alternative,
 }
 
 impl Matcher {
@@ -111,6 +115,23 @@ impl Matcher {
             Some('$') => {
                 input.next();
                 Ok(Self::EndOfString)
+            }
+            Some('(') => {
+                input.next();
+                let mut matchers = Vec::new();
+                while let Some(ch) = input.peek() {
+                    if *ch == ')' {
+                        input.next();
+                        break;
+                    }
+                    matchers.push(Matcher::new(input)?);
+                }
+                // FIXME: We're allowing unterminated groups here as well!
+                Ok(Self::CaptureGroup(matchers))
+            }
+            Some('|') => {
+                input.next();
+                Ok(Self::Alternative)
             }
             Some(_) => {
                 let matcher = Self::SingleCharacter(SingleCharacterMatcher::new(input)?);
@@ -155,6 +176,8 @@ impl Matcher {
             Matcher::SingleCharacter(c) => input.next().is_some_and(|ch| c.test(ch.1)),
             Matcher::StartOfString => input.peek().is_some_and(|(idx, _)| *idx == 0),
             Matcher::EndOfString => input.peek().is_none(),
+            Matcher::CaptureGroup(inner) => Self::test_group(inner, input),
+            Matcher::Alternative => todo!("Alternatives are only supported in capture groups"),
             Matcher::Repeat { matcher, min, max } => {
                 let mut count = 0;
                 loop {
@@ -180,6 +203,22 @@ impl Matcher {
                 return true;
             }
         }
+    }
+
+    fn test_group<T>(inner: &Vec<Self>, input: &mut Peekable<T>) -> bool
+    where
+        T: Iterator<Item = (usize, char)> + Clone,
+    {
+        let options = inner.split(|m| m == &Matcher::Alternative);
+        for option in options {
+            let mut input_clone = input.clone();
+            if option.iter().all(|m| m.test(&mut input_clone)) {
+                std::mem::swap(input, &mut input_clone);
+                return true;
+            }
+        }
+
+        false
     }
 }
 
@@ -335,6 +374,14 @@ mod test {
         assert!(!pattern.test("abbc"));
         assert!(!pattern.test("abbbc"));
         assert!(pattern.test("ac"));
+    }
+
+    #[test]
+    fn alternative() {
+        let pattern = Pattern::new(r"(abc|xyz)\d").expect("Pattern is correct");
+        assert!(pattern.test("abc1"));
+        assert!(pattern.test("xyz2"));
+        assert!(!pattern.test("xyz"));
     }
 
     #[test]
