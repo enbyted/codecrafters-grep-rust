@@ -44,8 +44,7 @@ impl SingleCharacterMatcher {
 
     pub fn new_class(class: char) -> Result<Self> {
         match class {
-            '\\' => Ok(Self::Literal('\\')),
-            ']' => Ok(Self::Literal(']')),
+            ch if !ch.is_alphanumeric() => Ok(Self::Literal(ch)),
             'd' => Ok(Self::Digit),
             'w' => Ok(Self::Alphanumeric),
             ch => Err(Error::UnknownCharacterType(ch)),
@@ -91,6 +90,7 @@ impl SingleCharacterMatcher {
 enum Matcher {
     SingleCharacter(SingleCharacterMatcher),
     StartOfString,
+    EndOfString,
 }
 
 impl Matcher {
@@ -99,6 +99,10 @@ impl Matcher {
             Some('^') => {
                 input.next();
                 Ok(Self::StartOfString)
+            }
+            Some('$') => {
+                input.next();
+                Ok(Self::EndOfString)
             }
             Some(_) => Ok(Self::SingleCharacter(SingleCharacterMatcher::new(input)?)),
             None => Err(Error::EOF),
@@ -109,6 +113,7 @@ impl Matcher {
         match self {
             Matcher::SingleCharacter(c) => input.next().is_some_and(|ch| c.test(ch.1)),
             Matcher::StartOfString => input.peek().is_some_and(|(idx, _)| *idx == 0),
+            Matcher::EndOfString => input.peek().is_none(),
         }
     }
 }
@@ -229,6 +234,13 @@ mod test {
         assert!(!pattern.test("ba"));
     }
 
+    #[test]
+    fn end_of_string_match() {
+        let pattern = Pattern::new(r"a$").expect("Pattern is correct");
+        assert!(pattern.test("a"));
+        assert!(!pattern.test("ab"));
+        assert!(pattern.test("ba"));
+    }
 
     #[test]
     fn full_test() {
