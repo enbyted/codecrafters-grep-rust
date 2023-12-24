@@ -14,6 +14,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 enum SingleCharacterMatcher {
     Literal(char),
+    Any,
     Digit,
     Alphanumeric,
     Group(Vec<SingleCharacterMatcher>),
@@ -25,6 +26,7 @@ impl SingleCharacterMatcher {
         match input.next() {
             Some('\\') => Self::new_class(input.next().ok_or(Error::EOF)?),
             Some('[') => Self::new_group(input),
+            Some('.') => Ok(Self::Any),
             Some(ch) => Ok(Self::new_literal(ch)),
             None => Err(Error::EOF),
         }
@@ -83,6 +85,7 @@ impl SingleCharacterMatcher {
             SingleCharacterMatcher::Alphanumeric => ch.is_ascii_alphanumeric() || ch == '_',
             SingleCharacterMatcher::Group(options) => options.iter().any(|o| o.test(ch)),
             SingleCharacterMatcher::NegativeGroup(options) => !options.iter().any(|o| o.test(ch)),
+            SingleCharacterMatcher::Any => true,
         }
     }
 }
