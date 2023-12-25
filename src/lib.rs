@@ -238,14 +238,16 @@ impl Matcher {
         &self,
         input: &mut BufferedIterator<T>,
         captured_groups: &Vec<String>,
-    ) -> (bool, Option<String>)
+    ) -> (bool, Vec<String>)
     where
         T: Iterator<Item = (usize, char)> + Clone,
     {
         match self {
-            Matcher::SingleCharacter(c) => (input.next().is_some_and(|ch| c.test(ch.1)), None),
-            Matcher::StartOfString => (input.peek().is_some_and(|(idx, _)| *idx == 0), None),
-            Matcher::EndOfString => (input.peek().is_none(), None),
+            Matcher::SingleCharacter(c) => {
+                (input.next().is_some_and(|ch| c.test(ch.1)), Vec::new())
+            }
+            Matcher::StartOfString => (input.peek().is_some_and(|(idx, _)| *idx == 0), Vec::new()),
+            Matcher::EndOfString => (input.peek().is_none(), Vec::new()),
             Matcher::CaptureGroup(inner) => Self::test_group(inner, input, captured_groups),
             Matcher::Backreference(index) => {
                 let index = index - 1;
@@ -253,13 +255,13 @@ impl Matcher {
                     eprintln!(
                         "Referenced nonexistent group {index}. Captured: {captured_groups:?}"
                     );
-                    (false, None)
+                    (false, Vec::new())
                 } else {
                     (
                         captured_groups[index]
                             .chars()
                             .all(|ch| input.next().is_some_and(|c| c.1 == ch)),
-                        None,
+                        Vec::new(),
                     )
                 }
             }
@@ -282,11 +284,11 @@ impl Matcher {
 
                 if let Some(min) = min {
                     if count < *min {
-                        return (false, None);
+                        return (false, Vec::new());
                     }
                 }
 
-                return (true, None);
+                return (true, Vec::new());
             }
         }
     }
@@ -295,29 +297,37 @@ impl Matcher {
         inner: &Vec<Self>,
         input: &mut BufferedIterator<T>,
         captured_groups: &Vec<String>,
-    ) -> (bool, Option<String>)
+    ) -> (bool, Vec<String>)
     where
         T: Iterator<Item = (usize, char)> + Clone,
     {
         let options = inner.split(|m| m == &Matcher::Alternative);
         for option in options {
             let mut buffered_input = input.clone();
+            let mut our_captures = Vec::new();
+            let mut all_captures = captured_groups.clone();
+            all_captures.push(String::new()); // Placeholder for our group
             buffered_input.subdivide();
 
-            if option
-                .iter()
-                .all(|m| m.test(&mut buffered_input, captured_groups).0)
-            {
+            if option.iter().all(|m| {
+                let (matched, captures) = m.test(&mut buffered_input, &all_captures);
+                for capture in captures {
+                    our_captures.push(capture.clone());
+                    all_captures.push(capture);
+                }
+                matched
+            }) {
                 let matched_value = buffered_input
                     .pop_divided()
                     .expect("We have subdivided before, popping should succeed");
                 std::mem::swap(input, &mut buffered_input);
 
-                return (true, Some(matched_value));
+                our_captures.insert(0, matched_value);
+                return (true, our_captures);
             }
         }
 
-        (false, None)
+        (false, Vec::new())
     }
 }
 
@@ -363,14 +373,12 @@ impl Pattern {
     {
         let mut captured = Vec::new();
         for matcher in &self.matchers {
-            let (matched, value) = matcher.test(input, &captured);
+            let (matched, mut captures) = matcher.test(input, &captured);
             if !matched {
                 return (false, captured);
             }
 
-            if let Some(value) = value {
-                captured.push(value);
-            }
+            captured.append(&mut captures);
         }
 
         (true, captured)
@@ -508,10 +516,34 @@ mod test {
     }
 
     #[test]
+    fn nested_match_test() {
+        let pattern = Pattern::new(r"'((\w+) and cat)'").expect("Pattern is correct");
+        let (matched, all, groups) = pattern.run("'dog and cat'");
+        assert!(matched);
+        assert_eq!(all, "'dog and cat'");
+        assert_eq!(groups[0], "dog and cat");
+        assert_eq!(groups[1], "dog");
+    }
+
+    #[test]
     fn backreference_test() {
         let pattern = Pattern::new(r"(\w+) and \1").expect("Pattern is correct");
         assert!(pattern.test("cat and cat"));
         assert!(!pattern.test("cat and dog2"));
+    }
+
+    #[test]
+    fn nested_backreference_test() {
+        let pattern =
+            Pattern::new(r"('(\w+) and \2') is the same as \1").expect("Pattern is correct");
+        assert!(pattern.test("'cat and cat' is the same as 'cat and cat'"));
+    }
+
+    #[test]
+    fn double_nested_backreference_test() {
+        let pattern =
+            Pattern::new(r"('((\w+) and) \3') is the same as \1").expect("Pattern is correct");
+        assert!(pattern.test("'cat and cat' is the same as 'cat and cat'"));
     }
 
     #[test]
