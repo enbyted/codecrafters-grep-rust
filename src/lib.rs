@@ -1,4 +1,4 @@
-use std::iter::Peekable;
+use std::{fmt::Debug, iter::Peekable};
 
 use thiserror::Error;
 
@@ -89,6 +89,11 @@ impl SingleCharacterMatcher {
             SingleCharacterMatcher::Any => true,
         }
     }
+}
+
+#[derive(Debug, Clone)]
+struct BacktrackInfo {
+    consumed: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -238,30 +243,41 @@ impl Matcher {
         &self,
         input: &mut BufferedIterator<T>,
         captured_groups: &Vec<String>,
-    ) -> (bool, Vec<String>)
+        backtrack: Option<BacktrackInfo>,
+    ) -> (bool, Vec<String>, Option<BacktrackInfo>)
     where
-        T: Iterator<Item = (usize, char)> + Clone,
+        T: Iterator<Item = (usize, char)> + Clone + Debug,
     {
         match self {
-            Matcher::SingleCharacter(c) => {
-                (input.next().is_some_and(|ch| c.test(ch.1)), Vec::new())
+            Matcher::SingleCharacter(c) => (
+                input.next().is_some_and(|ch| c.test(ch.1)),
+                Vec::new(),
+                None,
+            ),
+            Matcher::StartOfString => (
+                input.peek().is_some_and(|(idx, _)| *idx == 0),
+                Vec::new(),
+                None,
+            ),
+            Matcher::EndOfString => (input.peek().is_none(), Vec::new(), None),
+            Matcher::CaptureGroup(inner) => {
+                Self::test_group(inner, input, captured_groups, backtrack)
             }
-            Matcher::StartOfString => (input.peek().is_some_and(|(idx, _)| *idx == 0), Vec::new()),
-            Matcher::EndOfString => (input.peek().is_none(), Vec::new()),
-            Matcher::CaptureGroup(inner) => Self::test_group(inner, input, captured_groups),
             Matcher::Backreference(index) => {
-                let index = index - 1;
+                let index = index - 0;
                 if index >= captured_groups.len() {
                     eprintln!(
                         "Referenced nonexistent group {index}. Captured: {captured_groups:?}"
                     );
-                    (false, Vec::new())
+                    (false, Vec::new(), None)
                 } else {
+                    eprintln!("Backreference {index}: '{:?}'", captured_groups);
                     (
                         captured_groups[index]
                             .chars()
                             .all(|ch| input.next().is_some_and(|c| c.1 == ch)),
                         Vec::new(),
+                        None,
                     )
                 }
             }
@@ -270,10 +286,18 @@ impl Matcher {
                 let mut count = 0;
                 loop {
                     let mut input_clone = input.clone();
-                    if !matcher.test(&mut input_clone, captured_groups).0 {
+                    if !matcher
+                        .test(&mut input_clone, captured_groups, backtrack.clone())
+                        .0
+                    {
                         break;
                     }
                     std::mem::swap(input, &mut input_clone);
+                    if let Some(BacktrackInfo { consumed }) = backtrack {
+                        if count >= (consumed - 1) {
+                            break;
+                        }
+                    }
                     count += 1;
                     if let Some(max) = max {
                         if count == *max {
@@ -284,11 +308,15 @@ impl Matcher {
 
                 if let Some(min) = min {
                     if count < *min {
-                        return (false, Vec::new());
+                        return (false, Vec::new(), None);
                     }
                 }
 
-                return (true, Vec::new());
+                if count > 0 {
+                    return (true, Vec::new(), Some(BacktrackInfo { consumed: count }));
+                } else {
+                    return (true, Vec::new(), None);
+                }
             }
         }
     }
@@ -297,37 +325,86 @@ impl Matcher {
         inner: &Vec<Self>,
         input: &mut BufferedIterator<T>,
         captured_groups: &Vec<String>,
-    ) -> (bool, Vec<String>)
+        backtrack: Option<BacktrackInfo>,
+    ) -> (bool, Vec<String>, Option<BacktrackInfo>)
     where
-        T: Iterator<Item = (usize, char)> + Clone,
+        T: Iterator<Item = (usize, char)> + Clone + Debug,
     {
         let options = inner.split(|m| m == &Matcher::Alternative);
-        for option in options {
+        'option_loop: for option in options {
+            #[derive(Debug)]
+            struct BacktrackState<'a, T>(
+                BufferedIterator<T>,
+                Vec<String>,
+                BacktrackInfo,
+                std::slice::Iter<'a, Matcher>,
+            );
+
+            let mut backtrack_stack: Vec<BacktrackState<'_, T>> = Vec::new();
+            let mut backtrack_info = None;
             let mut buffered_input = input.clone();
             let mut our_captures = Vec::new();
             let mut all_captures = captured_groups.clone();
             all_captures.push(String::new()); // Placeholder for our group
             buffered_input.subdivide();
 
-            if option.iter().all(|m| {
-                let (matched, captures) = m.test(&mut buffered_input, &all_captures);
-                for capture in captures {
-                    our_captures.push(capture.clone());
-                    all_captures.push(capture);
-                }
-                matched
-            }) {
-                let matched_value = buffered_input
-                    .pop_divided()
-                    .expect("We have subdivided before, popping should succeed");
-                std::mem::swap(input, &mut buffered_input);
+            let mut matcher_iter = option.iter();
+            let mut backtrack_matcher_iter = matcher_iter.clone();
+            'match_loop: while let Some(m) = matcher_iter.next() {
+                let mut backtrack_state = BacktrackState(
+                    buffered_input.clone(),
+                    our_captures.clone(),
+                    BacktrackInfo { consumed: 0 },
+                    backtrack_matcher_iter.clone(),
+                );
+                backtrack_matcher_iter.next();
 
-                our_captures.insert(0, matched_value);
-                return (true, our_captures);
+                let (matched, captures, backtrack) =
+                    m.test(&mut buffered_input, &all_captures, backtrack_info.take());
+
+                if !matched {
+                    if let Some(mut state) = backtrack_stack.pop() {
+                        eprintln!(
+                            "Match failed, backtracking: {:?}, {:?}",
+                            buffered_input, state
+                        );
+                        std::mem::swap(&mut buffered_input, &mut state.0);
+                        std::mem::swap(&mut our_captures, &mut state.1);
+                        all_captures = captured_groups
+                            .iter()
+                            .chain(our_captures.iter())
+                            .map(|c| c.clone())
+                            .collect();
+                        backtrack_info = Some(state.2);
+                        std::mem::swap(&mut matcher_iter, &mut state.3);
+                        backtrack_matcher_iter = matcher_iter.clone();
+                        continue 'match_loop;
+                    } else {
+                        eprintln!("Match failed, nothing to backtrack");
+                        continue 'option_loop;
+                    }
+                } else {
+                    for capture in captures {
+                        our_captures.push(capture.clone());
+                        all_captures.push(capture);
+                    }
+                    if let Some(backtrack) = backtrack {
+                        backtrack_state.2 = backtrack;
+                        backtrack_stack.push(backtrack_state);
+                    }
+                }
             }
+
+            let matched_value = buffered_input
+                .pop_divided()
+                .expect("We have subdivided before, popping should succeed");
+            std::mem::swap(input, &mut buffered_input);
+
+            our_captures.insert(0, matched_value);
+            return (true, our_captures, None);
         }
 
-        (false, Vec::new())
+        (false, Vec::new(), None)
     }
 }
 
@@ -369,19 +446,17 @@ impl Pattern {
 
     fn test_section<T>(&self, input: &mut BufferedIterator<T>) -> (bool, Vec<String>)
     where
-        T: Iterator<Item = (usize, char)> + Clone,
+        T: Iterator<Item = (usize, char)> + Clone + Debug,
     {
-        let mut captured = Vec::new();
-        for matcher in &self.matchers {
-            let (matched, mut captures) = matcher.test(input, &captured);
-            if !matched {
-                return (false, captured);
-            }
+        let matcher = Matcher::CaptureGroup(self.matchers.clone());
+        let (matched, mut captures, _backtrack) = matcher.test(input, &Vec::new(), None);
 
-            captured.append(&mut captures);
+        if matched {
+            captures.remove(0);
+            (true, captures)
+        } else {
+            (false, Vec::new())
         }
-
-        (true, captured)
     }
 }
 
@@ -544,6 +619,12 @@ mod test {
         let pattern =
             Pattern::new(r"('((\w+) and) \3') is the same as \1").expect("Pattern is correct");
         assert!(pattern.test("'cat and cat' is the same as 'cat and cat'"));
+    }
+
+    #[test]
+    fn backtracking() {
+        let pattern = Pattern::new(r"\w+a").expect("Pattern is correct");
+        assert!(pattern.test("mocha"));
     }
 
     #[test]
