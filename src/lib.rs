@@ -1,5 +1,6 @@
 use std::{fmt::Debug, iter::Peekable};
 
+use log::{debug, trace, warn};
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -276,12 +277,10 @@ impl Matcher {
             Matcher::Backreference(index) => {
                 let index = index - 0;
                 if index >= captured_groups.len() {
-                    eprintln!(
-                        "Referenced nonexistent group {index}. Captured: {captured_groups:?}"
-                    );
+                    warn!("Referenced nonexistent group {index}. Captured: {captured_groups:?}");
                     (false, Vec::new(), None)
                 } else {
-                    eprintln!(
+                    debug!(
                         "Backreference {index}: '{:?}' - '{:?}'",
                         captured_groups,
                         Iterator::take(input.clone(), captured_groups[index].len())
@@ -309,7 +308,7 @@ impl Matcher {
                     }
                     if let Some(BacktrackInfo::Range(consumed)) = backtrack {
                         if count >= (consumed - 1) {
-                            eprintln!(
+                            trace!(
                                 "Range limiting due to backtracking {count} >= ({consumed} - 1)"
                             );
                             break;
@@ -319,7 +318,7 @@ impl Matcher {
                     count += 1;
                     if let Some(max) = max {
                         if count == *max {
-                            eprintln!("Range limiting due to max {count} == {max}");
+                            trace!("Range limiting due to max {count} == {max}");
                             break;
                         }
                     }
@@ -327,7 +326,7 @@ impl Matcher {
 
                 if let Some(min) = min {
                     if count < *min {
-                        eprintln!("Range failed due to min {count} < {min}");
+                        debug!("Range failed due to min {count} < {min}");
                         return (false, Vec::new(), None);
                     }
                 }
@@ -376,7 +375,7 @@ impl Matcher {
             let mut backtrack_matcher_iter = matcher_iter.clone();
 
             if let Some(mut state) = backtrack_stack.pop() {
-                //eprintln!("Backtracking on entry: {:?}, {:?}", buffered_input, state);
+                trace!("Backtracking on entry: {:?}, {:?}", buffered_input, state);
                 std::mem::swap(&mut buffered_input, &mut state.input);
                 std::mem::swap(&mut our_captures, &mut state.captures);
                 all_captures = captured_groups
@@ -404,7 +403,7 @@ impl Matcher {
 
                 if !matched {
                     if let Some(mut state) = backtrack_stack.pop() {
-                        eprintln!(
+                        debug!(
                             "Match failed, backtracking: {:?}, {:?}",
                             buffered_input.pop_divided(),
                             state
@@ -422,7 +421,7 @@ impl Matcher {
                         backtrack_matcher_iter = matcher_iter.clone();
                         continue 'match_loop;
                     } else {
-                        //eprintln!("Match failed, nothing to backtrack");
+                        trace!("Match failed, nothing to backtrack");
                         continue 'option_loop;
                     }
                 } else {
@@ -690,7 +689,6 @@ mod test {
     fn backreference_after_backtrack() {
         let pattern = Pattern::new(r"(t)t?\1").expect("Pattern is correct");
         assert!(pattern.test("ttt"));
-        eprintln!("second case");
         assert!(pattern.test("tt"));
     }
 

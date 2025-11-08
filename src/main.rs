@@ -7,12 +7,15 @@ use std::io::Read;
 use std::process;
 
 use anyhow::Context;
+use env_logger::Env;
 use grep_starter_rust::Pattern;
+use log::error;
 
 // Usage: echo <input_text> | your_grep.sh -E <pattern>
 fn main() -> anyhow::Result<()> {
+    env_logger::init_from_env(Env::new().default_filter_or("trace"));
     if env::args().nth(1).unwrap() != "-E" {
-        eprintln!("Expected first argument to be '-E'");
+        error!("Expected first argument to be '-E'");
         process::exit(1);
     }
 
@@ -28,10 +31,12 @@ fn main() -> anyhow::Result<()> {
     let mut input_reader = BufReader::new(input);
     let mut input_line = String::new();
     let mut matched = false;
-    while let Ok(len) = input_reader.read_line(&mut input_line) && len > 0 {
+    while let Ok(len) = input_reader.read_line(&mut input_line)
+        && len > 0
+    {
         if pattern.test(&input_line) {
             matched = true;
-            println!("{input_line}");
+            print!("{input_line}");
         }
         input_line.clear();
     }
