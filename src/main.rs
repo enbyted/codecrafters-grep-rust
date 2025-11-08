@@ -4,6 +4,8 @@ use std::io;
 use std::io::BufRead;
 use std::io::BufReader;
 use std::io::Read;
+use std::path::Path;
+use std::path::PathBuf;
 use std::process;
 
 use anyhow::Context;
@@ -31,13 +33,55 @@ fn main() -> anyhow::Result<()> {
         if file == "-" {
             inputs.push(("-".to_string(), Box::new(io::stdin())));
         } else {
-            inputs.push((
-                file.clone(),
-                Box::new(
-                    fs::File::open(&file)
-                        .with_context(|| format!("Failed to open file: {file}"))?,
-                ),
-            ));
+            let meta = std::fs::metadata(&file)
+                .with_context(|| format!("Failed to get metadata for file: {file}"))?;
+            if meta.is_dir() {
+                let base = PathBuf::from(&file)
+                    .canonicalize()
+                    .with_context(|| format!("Failed to canonicalize path: {file}"))?;
+                let mut dir_inputs = vec![base.clone()];
+                while let Some(file) = dir_inputs.pop() {
+                    for entry in fs::read_dir(&file)
+                        .with_context(|| format!("Failed to read directory: {file:?}"))?
+                    {
+                        let entry = entry
+                            .with_context(|| format!("Failed to get entry for file in {file:?}"))?;
+
+                        if entry
+                            .file_type()
+                            .with_context(|| format!("Failed to get file type for entry {file:?}"))?
+                            .is_dir()
+                        {
+                            dir_inputs.push(entry.path());
+                        } else {
+                            inputs.push((
+                                entry
+                                    .path()
+                                    .strip_prefix(&base)
+                                    .with_context(|| {
+                                        format!(
+                                            "Failed to strip prefix from path: {:?}",
+                                            entry.path()
+                                        )
+                                    })?
+                                    .to_string_lossy()
+                                    .to_string(),
+                                Box::new(fs::File::open(&entry.path()).with_context(|| {
+                                    format!("Failed to open file: {:?}", entry.path())
+                                })?),
+                            ));
+                        }
+                    }
+                }
+            } else {
+                inputs.push((
+                    file.clone(),
+                    Box::new(
+                        fs::File::open(&file)
+                            .with_context(|| format!("Failed to open file: {file}"))?,
+                    ),
+                ));
+            }
         }
     }
 
