@@ -9,6 +9,8 @@ pub enum Error {
     EOF,
     #[error("Unknown character class `\\{0}`")]
     UnknownCharacterType(char),
+    #[error("Unterminated group")]
+    UnterminatedGroup,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -192,15 +194,19 @@ impl Matcher {
             Some('(') => {
                 input.next();
                 let mut matchers = Vec::new();
+                let mut terminated = false;
                 while let Some(ch) = input.peek() {
                     if *ch == ')' {
                         input.next();
+                        terminated = true;
                         break;
                     }
                     matchers.push(Matcher::new(input)?);
                 }
-                // FIXME: We're allowing unterminated groups here as well!
-                Ok(Self::CaptureGroup(matchers))
+                if !terminated {
+                    return Err(Error::UnterminatedGroup);
+                }
+                Ok(Self::maybe_repeat(Self::CaptureGroup(matchers), input))
             }
             Some('|') => {
                 input.next();
@@ -218,35 +224,39 @@ impl Matcher {
                 }
                 let matcher = Self::SingleCharacter(SingleCharacterMatcher::new(input)?);
 
-                Ok(match input.peek() {
-                    Some('+') => {
-                        input.next();
-                        Self::Repeat {
-                            matcher: Box::new(matcher),
-                            min: Some(1),
-                            max: None,
-                        }
-                    }
-                    Some('*') => {
-                        input.next();
-                        Self::Repeat {
-                            matcher: Box::new(matcher),
-                            min: None,
-                            max: None,
-                        }
-                    }
-                    Some('?') => {
-                        input.next();
-                        Self::Repeat {
-                            matcher: Box::new(matcher),
-                            min: None,
-                            max: Some(1),
-                        }
-                    }
-                    _ => matcher,
-                })
+                Ok(Self::maybe_repeat(matcher, input))
             }
             None => Err(Error::EOF),
+        }
+    }
+
+    fn maybe_repeat(matcher: Matcher, input: &mut Peekable<impl Iterator<Item = char>>) -> Matcher {
+        match input.peek() {
+            Some('+') => {
+                input.next();
+                Self::Repeat {
+                    matcher: Box::new(matcher),
+                    min: Some(1),
+                    max: None,
+                }
+            }
+            Some('*') => {
+                input.next();
+                Self::Repeat {
+                    matcher: Box::new(matcher),
+                    min: None,
+                    max: None,
+                }
+            }
+            Some('?') => {
+                input.next();
+                Self::Repeat {
+                    matcher: Box::new(matcher),
+                    min: None,
+                    max: Some(1),
+                }
+            }
+            _ => matcher,
         }
     }
 

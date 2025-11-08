@@ -10,6 +10,7 @@ use anyhow::Context;
 use clap::Parser;
 use env_logger::Env;
 use grep_starter_rust::Pattern;
+use log::debug;
 use log::info;
 
 #[derive(Debug, Clone, PartialEq, Eq, Parser)]
@@ -31,6 +32,7 @@ fn main() -> anyhow::Result<()> {
     env_logger::init_from_env(Env::new().default_filter_or("info"));
 
     let pattern = Pattern::new(&args.pattern)?;
+    debug!("Pattern: {:?}", pattern);
 
     let mut inputs: Vec<(String, Box<dyn Read>)> = vec![];
 
