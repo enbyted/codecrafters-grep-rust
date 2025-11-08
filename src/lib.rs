@@ -11,6 +11,10 @@ pub enum Error {
     UnknownCharacterType(char),
     #[error("Unterminated group")]
     UnterminatedGroup,
+    #[error("Invalid count quantifier: {0}")]
+    InvalidCountQuantifier(#[source] std::num::ParseIntError),
+    #[error("Unterminated count quantifier")]
+    UnterminatedCountQuantifier,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -206,7 +210,7 @@ impl Matcher {
                 if !terminated {
                     return Err(Error::UnterminatedGroup);
                 }
-                Ok(Self::maybe_repeat(Self::CaptureGroup(matchers), input))
+                Self::maybe_repeat(Self::CaptureGroup(matchers), input)
             }
             Some('|') => {
                 input.next();
@@ -224,39 +228,79 @@ impl Matcher {
                 }
                 let matcher = Self::SingleCharacter(SingleCharacterMatcher::new(input)?);
 
-                Ok(Self::maybe_repeat(matcher, input))
+                Self::maybe_repeat(matcher, input)
             }
             None => Err(Error::EOF),
         }
     }
 
-    fn maybe_repeat(matcher: Matcher, input: &mut Peekable<impl Iterator<Item = char>>) -> Matcher {
+    fn maybe_repeat(
+        matcher: Matcher,
+        input: &mut Peekable<impl Iterator<Item = char>>,
+    ) -> Result<Matcher> {
         match input.peek() {
             Some('+') => {
                 input.next();
-                Self::Repeat {
+                Ok(Self::Repeat {
                     matcher: Box::new(matcher),
                     min: Some(1),
                     max: None,
-                }
+                })
             }
             Some('*') => {
                 input.next();
-                Self::Repeat {
+                Ok(Self::Repeat {
                     matcher: Box::new(matcher),
                     min: None,
                     max: None,
-                }
+                })
             }
             Some('?') => {
                 input.next();
-                Self::Repeat {
+                Ok(Self::Repeat {
                     matcher: Box::new(matcher),
                     min: None,
                     max: Some(1),
-                }
+                })
             }
-            _ => matcher,
+            Some('{') => {
+                input.next();
+                fn read_number(input: &mut Peekable<impl Iterator<Item = char>>) -> Result<usize> {
+                    let mut result = String::new();
+                    while let Some(ch) = input.peek()
+                        && ch.is_ascii_digit()
+                    {
+                        result.push(*ch);
+                        input.next();
+                    }
+                    usize::from_str_radix(&result, 10).map_err(Error::InvalidCountQuantifier)
+                }
+
+                let min = read_number(input)?;
+                let mut max: Option<usize> = Some(min);
+                match input.peek() {
+                    Some(',') => {
+                        input.next();
+                        if input.peek() == Some(&'}') {
+                            max = None;
+                        } else {
+                            max = Some(read_number(input)?);
+                        }
+                    }
+                    Some(_) => {}
+                    None => {}
+                }
+                if input.next() != Some('}') {
+                    return Err(Error::UnterminatedCountQuantifier);
+                }
+
+                Ok(Self::Repeat {
+                    matcher: Box::new(matcher),
+                    min: Some(min),
+                    max,
+                })
+            }
+            _ => Ok(matcher),
         }
     }
 
